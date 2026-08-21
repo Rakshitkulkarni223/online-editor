@@ -20,13 +20,14 @@ type Props = {
   onMount: (editor: Monaco.editor.IStandaloneCodeEditor, monaco: typeof Monaco) => void;
   onReset: () => void;
   onRun: () => void;
+  onResetClick: () => void;
   currentStep?: Step;
   interviewHidden?: boolean;
   sigLoading?: boolean;
 };
 
 export function EditorPanel(props: Props) {
-  const { language, code, fontSize, onCodeChange, onLanguageChange, onFontSize, onMount, onReset, onRun, currentStep, interviewHidden, sigLoading } = props;
+  const { language, code, fontSize, onCodeChange, onLanguageChange, onFontSize, onMount, onReset, onRun, onResetClick, currentStep, interviewHidden, sigLoading } = props;
   const [theme, setTheme] = useState<Theme>('codetrace-dark');
   const [pyodideStatus, setPyodideStatus] = useState<'loading' | 'ready' | 'off'>('off');
 
@@ -55,7 +56,7 @@ export function EditorPanel(props: Props) {
             <option value="vs-dark">Dark</option>
             <option value="vs-light">Light</option>
           </select>
-          <button onClick={onReset} title="Reset code to stub" disabled={interviewHidden}>↺</button>
+          <button onClick={onResetClick} title="Reset code to stub" disabled={interviewHidden}>↺</button>
           <button onClick={onRun} title="Run code" disabled={interviewHidden}>▶</button>
         </div>
       </div>

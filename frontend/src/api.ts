@@ -10,6 +10,7 @@ export type SavedProblem = {
   description?: string;
   problem_text?: string;
   code?: string;
+  stub_code?: string;
   language?: string;
   status: string;
   passed: number;
@@ -24,6 +25,7 @@ export type SaveProblemReq = {
   description?: string;
   problem_text?: string;
   code?: string;
+  stub_code?: string;
   language?: string;
   status?: string;
   passed?: number;

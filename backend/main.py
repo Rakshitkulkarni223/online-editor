@@ -68,6 +68,11 @@ def init_db():
         conn.execute("ALTER TABLE problems ADD COLUMN tests TEXT DEFAULT ''")
     except Exception:
         pass  # column already exists
+    # Add stub_code column to store the original AI-generated stub (for Reset)
+    try:
+        conn.execute("ALTER TABLE problems ADD COLUMN stub_code TEXT DEFAULT ''")
+    except Exception:
+        pass  # column already exists
     conn.commit()
     conn.close()
 
@@ -109,6 +114,7 @@ class ProblemSave(BaseModel):
     description: str = ""
     problem_text: str = ""
     code: str = ""
+    stub_code: str = ""
     language: str = "python"
     status: str = "in_progress"  # in_progress | solved | failed
     passed: int = 0
@@ -150,9 +156,9 @@ def get_problem(problem_id: int):
 def save_problem(req: ProblemSave):
     conn = get_db()
     cur = conn.execute(
-        "INSERT INTO problems (title, description, problem_text, code, language, status, passed, total, tests) "
-        "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
-        (req.title, req.description, req.problem_text, req.code, req.language, req.status, req.passed, req.total, req.tests),
+        "INSERT INTO problems (title, description, problem_text, code, stub_code, language, status, passed, total, tests) "
+        "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+        (req.title, req.description, req.problem_text, req.code, req.stub_code, req.language, req.status, req.passed, req.total, req.tests),
     )
     conn.commit()
     pid = cur.lastrowid
@@ -168,9 +174,9 @@ def update_problem(problem_id: int, req: ProblemSave):
         conn.close()
         raise HTTPException(404, "Problem not found")
     conn.execute(
-        "UPDATE problems SET title=?, description=?, problem_text=?, code=?, language=?, "
+        "UPDATE problems SET title=?, description=?, problem_text=?, code=?, stub_code=?, language=?, "
         "status=?, passed=?, total=?, tests=?, updated_at=CURRENT_TIMESTAMP WHERE id=?",
-        (req.title, req.description, req.problem_text, req.code, req.language, req.status, req.passed, req.total, req.tests, problem_id),
+        (req.title, req.description, req.problem_text, req.code, req.stub_code, req.language, req.status, req.passed, req.total, req.tests, problem_id),
     )
     conn.commit()
     conn.close()

@@ -64,6 +64,14 @@ const starter: Record<Language, string> = {
   cpp: `// Paste a problem statement on the left and click Parse to get started.\n`,
 };
 
+// The default code template shown when a problem is parsed — Reset restores this
+const defaultCode: Record<Language, string> = {
+  python: `# Write your solution here\n    pass\n`,
+  javascript: `// Write your solution here\n`,
+  java: `// Write your solution here\n`,
+  cpp: `// Write your solution here\n`,
+};
+
 const DEFAULT_PROBLEM = '';
 
 /** Convert camelCase to Title Case (e.g. "twoSum" → "Two Sum", "maxSubArray" → "Max Sub Array") */
@@ -151,6 +159,27 @@ function App() {
 
   const editorRef = useRef<Monaco.editor.IStandaloneCodeEditor | null>(null);
   const monacoRef = useRef<typeof Monaco | null>(null);
+
+  // Set code programmatically AND clear Monaco's undo stack so Cmd+Z
+  // doesn't jump back through AI-generated stubs, loaded problems, or resets.
+  const setCodeAndClearHistory = (newCode: string) => {
+    try {
+      setCode(newCode);
+      // Use Monaco's setValue which resets the undo/redo stack entirely
+      requestAnimationFrame(() => {
+        try {
+          const editor = editorRef.current;
+          if (!editor) return;
+          const model = editor.getModel();
+          if (!model) return;
+          // setValue wipes the entire undo history
+          model.setValue(newCode);
+          // Mark a clean boundary so undo starts fresh from here
+          model.pushStackElement();
+        } catch { /* ignore */ }
+      });
+    } catch { /* ignore */ }
+  };
   const decorationsRef = useRef<string[]>([]);
   const lastAutoGenRef = useRef(''); // dedup key: serialized examples content
   const problemChangedRef = useRef(false); // skip auto-gen on initial load
@@ -248,7 +277,7 @@ function App() {
         if (obj.title) setProblemTitle(obj.title);
         if (obj.function_name && Array.isArray(obj.params) && obj.params.length > 0) {
           const stub = buildSolutionStub(obj.params, obj.function_name);
-          setCode(stub);
+          setCodeAndClearHistory(stub);
           stubCodeRef.current = stub;
           setHarness(buildHarness(obj.function_name));
           setFunctionName(obj.function_name);
@@ -260,7 +289,7 @@ function App() {
           if (params.length === 0) params = inferParamsFromDescription(parsed.description);
           const stubParams = params.length > 0 ? params : [{ name: 'data', type: 'int' }];
           const stub = buildSolutionStub(stubParams, funcName);
-          setCode(stub);
+          setCodeAndClearHistory(stub);
           stubCodeRef.current = stub;
           setHarness(buildHarness(funcName));
           setFunctionName(funcName);
@@ -274,7 +303,7 @@ function App() {
         if (params.length === 0) params = inferParamsFromDescription(parsed.description);
         const stubParams = params.length > 0 ? params : [{ name: 'data', type: 'int' }];
         const stub = buildSolutionStub(stubParams, funcName);
-        setCode(stub);
+        setCodeAndClearHistory(stub);
         stubCodeRef.current = stub;
         setHarness(buildHarness(funcName));
         setFunctionName(funcName);
@@ -322,7 +351,7 @@ function App() {
         }, ac.signal);
         const obj = repairJSON(res.text);
         if (obj.function_name && Array.isArray(obj.params)) {
-          setCode(buildSolutionStub(obj.params, obj.function_name));
+          setCodeAndClearHistory(buildSolutionStub(obj.params, obj.function_name));
           setHarness(buildHarness(obj.function_name));
           setLanguage('python');
         }
@@ -684,19 +713,21 @@ function App() {
   };
 
   const changeLanguage = (next: Language) => {
-    setLanguage(next); setCode(starter[next]); setHarness(''); setVisual(null); setResults([]); setRunResult(null);
+    setLanguage(next); setCodeAndClearHistory(starter[next]); setHarness(''); setVisual(null); setResults([]); setRunResult(null);
   };
-  // Reset only the code editor to the original AI-generated stub + clear results
+  // Reset to the initial AI-generated boilerplate (function signature + pass) — clears all user code
+  const [showResetModal, setShowResetModal] = useState(false);
   const reset = () => {
     try {
-      const stub = stubCodeRef.current || starter[language];
-      setCode(stub);
+      const stub = stubCodeRef.current || defaultCode[language];
+      setCodeAndClearHistory(stub);
       setResults([]);
       setVisual(null);
       setRunResult(null);
       setError('');
       setStep(0);
       setParseError('');
+      setShowResetModal(false);
     } catch { /* ignore */ }
   };
 
@@ -739,6 +770,7 @@ function App() {
         description: curParsed?.description || '',
         problem_text: curProblem,
         code: curCode,
+        stub_code: stubCodeRef.current,
         language: curLanguage,
         status,
         passed: passedCount,
@@ -808,13 +840,23 @@ function App() {
       languageRef.current = (p.language as Language) || 'python';
       // Update state
       setProblem(text);
-      setCode(p.code || '');
-      stubCodeRef.current = p.code || ''; // save stub for Reset
+      setCodeAndClearHistory(p.code || '');
       setLanguage((p.language as Language) || 'python');
       // Extract function name from loaded code and rebuild harness
-      const codeMatch = (p.code || '').match(/def\s+(\w+)\s*\(/);
+      const codeMatch = (p.code || '').match(/def\s+(\w+)\s*\(([^)]*)\)/);
       const fnName = codeMatch ? codeMatch[1] : '';
+      const fnParams = codeMatch ? codeMatch[2] : '';
       setFunctionName(fnName);
+      // Build the stub for Reset: use saved stub_code if available,
+      // otherwise reconstruct from the function signature in the code
+      if (p.stub_code) {
+        stubCodeRef.current = p.stub_code;
+      } else if (fnName) {
+        // Reconstruct the boilerplate from the function signature
+        stubCodeRef.current = `def ${fnName}(${fnParams}):\n    # Write your solution here\n    pass\n`;
+      } else {
+        stubCodeRef.current = defaultCode[(p.language as Language)] || defaultCode.python;
+      }
       // Use the saved title from DB as the problem title
       setProblemTitle(p.title || '');
       problemTitleRef.current = p.title || '';
@@ -859,7 +901,7 @@ function App() {
     } catch { /* ignore */ }
   };
 
-  const useSignature = (stub: string) => { if (stub) setCode(stub); };
+  const useSignature = (stub: string) => { if (stub) setCodeAndClearHistory(stub); };
 
   // Delete Problem — if it's the current one, reset to new mode
   const deleteProblem = (id: number) => {
@@ -878,7 +920,7 @@ function App() {
         testsRef.current = [];
         languageRef.current = 'python';
         setProblem('');
-        setCode(starter[language]);
+        setCodeAndClearHistory(starter[language]);
         setHarness('');
         setLanguage('python');
         setFunctionName('');
@@ -917,7 +959,7 @@ function App() {
       parsedRef.current = null;
       resultsRef.current = [];
       setProblem('');
-      setCode(starter[language]);
+      setCodeAndClearHistory(starter[language]);
       setHarness('');
       setLanguage('python');
       setFunctionName('');
@@ -1042,6 +1084,7 @@ function App() {
           onMount={onMount}
           onReset={reset}
           onRun={runCode}
+          onResetClick={() => setShowResetModal(true)}
           currentStep={currentStep}
           interviewHidden={interview}
           sigLoading={sigLoading}
@@ -1090,6 +1133,21 @@ function App() {
           <span className="toast-icon">{toast.type === 'error' ? '⚠' : 'ℹ'}</span>
           <span className="toast-msg">{toast.msg}</span>
           <button className="toast-close" onClick={() => setToast(null)}>✕</button>
+        </div>
+      )}
+
+      {/* Reset confirmation modal */}
+      {showResetModal && (
+        <div className="modal-overlay" onClick={() => setShowResetModal(false)}>
+          <div className="modal" onClick={e => e.stopPropagation()}>
+            <div className="modal-icon">↺</div>
+            <h3>Are you sure?</h3>
+            <p>Your current code will be discarded and reset to the default code!</p>
+            <div className="modal-actions">
+              <button className="secondary" onClick={() => setShowResetModal(false)}>Cancel</button>
+              <button className="danger" onClick={reset}>Confirm</button>
+            </div>
+          </div>
         </div>
       )}
 

@@ -270,6 +270,11 @@ button.active { background: #1f2937; border-color: #3b82f6; color: #93c5fd; }
 .modal-title { font-size: 18px; font-weight: 700; margin: 0 0 8px; color: #e7eaf0; }
 .modal-desc { font-size: 13px; color: #8b93a3; line-height: 1.5; margin: 0 0 20px; }
 .modal-actions { display: flex; gap: 8px; justify-content: center; flex-wrap: wrap; }
+.modal .danger {
+  padding: 9px 20px; font-size: 13px; font-weight: 600; border-radius: 8px; cursor: pointer;
+  background: #2d1518; border: 1px solid #5c2128; color: #ff8a8a; transition: all 0.15s;
+}
+.modal .danger:hover { background: #3d1a1f; border-color: #7c2a30; }
 @keyframes fadeIn { from { opacity: 0; } to { opacity: 1; } }
 @keyframes slideUp { from { opacity: 0; transform: translateY(12px); } to { opacity: 1; transform: translateY(0); } }
 @keyframes toastIn { from { opacity: 0; transform: translateX(100%); } to { opacity: 1; transform: translateX(0); } }
