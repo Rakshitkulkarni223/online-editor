@@ -28,11 +28,24 @@ export function ResultsPanel({ results, onPick }: { results: TestResult[]; onPic
   );
 }
 
-export function ConsolePanel({ runResult }: { runResult: RunResponse | null }) {
+export function ConsolePanel({ runResult, expected, activeTest }: { runResult: RunResponse | null; expected?: string; activeTest?: number }) {
+  const isWrong = runResult?.status === 'Wrong Answer';
+  const isAccepted = runResult?.status === 'Accepted';
   return (
     <div className="output-content">
-      <div className="console-head">Output</div>
-      <pre className="console">{runResult?.stdout || runResult?.stderr || 'Run your program to see stdout/stderr here.'}</pre>
+      {runResult && (
+        <div className={`run-status ${isAccepted ? 'accepted' : isWrong ? 'wrong' : ''}`}>
+          {isAccepted ? '✓ Accepted' : isWrong ? '✕ Wrong Answer' : runResult.status || 'Done'}
+        </div>
+      )}
+      <div className="console-head">Your Output</div>
+      <pre className="console">{runResult?.stdout || runResult?.stderr || 'Run your program to see output here.'}</pre>
+      {isWrong && expected !== undefined && (
+        <>
+          <div className="console-head expected">Expected Output</div>
+          <pre className="console expected">{expected || '(empty)'}</pre>
+        </>
+      )}
       {runResult && (
         <div className="metrics">
           Status: {runResult.status || 'Done'} · Time: {runResult.time || '—'} · Memory: {runResult.memory ?? '—'} KB

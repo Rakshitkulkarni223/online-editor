@@ -414,7 +414,12 @@ button.active { background: #1f2937; border-color: #3b82f6; color: #93c5fd; }
 
 /* ---- Console ---- */
 .console-head { font-size: 12px; color: #8b93a3; margin-bottom: 6px; }
+.console-head.expected { color: #fbbf24; margin-top: 12px; }
 .console { background: #0b0f14; border: 1px solid #232a34; border-radius: 6px; padding: 10px; font-size: 12px; white-space: pre-wrap; word-break: break-word; color: #dce1e9; min-height: 60px; }
+.console.expected { border-color: #5c2128; background: #1a0f10; color: #ffa726; }
+.run-status { font-size: 14px; font-weight: 700; margin-bottom: 10px; padding: 8px 12px; border-radius: 6px; }
+.run-status.accepted { background: #0d2818; color: #4caf50; border: 1px solid #1a4a2a; }
+.run-status.wrong { background: #2d1518; color: #ff6b6b; border: 1px solid #5c2128; }
 .metrics { margin-top: 8px; font-size: 11px; color: #8b93a3; }
 
 /* ---- Visualizer / Debugger ---- */

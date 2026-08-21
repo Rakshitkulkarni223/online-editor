@@ -101,6 +101,8 @@ function App() {
   const [visual, setVisual] = useState<VisualResponse | null>(null);
   const [step, setStep] = useState(0);
   const [busy, setBusy] = useState(false);
+  const busyRef = useRef(false);
+  useEffect(() => { busyRef.current = busy; }, [busy]);
   const [error, setError] = useState('');
   const [fontSize, setFontSize] = useState(14);
   const [interview, setInterview] = useState(false);
@@ -676,6 +678,7 @@ function App() {
   };
 
   const runCode = async () => {
+    if (busyRef.current) return;
     if (tests.length === 0) {
       setShowNoTestsModal(true);
       return;
@@ -684,12 +687,27 @@ function App() {
       showToast('Write some code before running. The editor only has a stub with "pass".');
       return;
     }
-    setBusy(true); setError('');
+    busyRef.current = true; setBusy(true); setError('');
     try {
-      const data = await api.run(language, fullCode, tests[activeTest]?.input || '');
-      setRunResult(data); setTab('console');
+      // Run the active test case and compare against expected output
+      const data = await api.test(language, fullCode, [tests[activeTest]]);
+      const result = data.results[0];
+      setResults(prev => {
+        const next = [...prev];
+        while (next.length < tests.length) next.push({ ...tests[next.length], passed: false, actual: '' });
+        next[activeTest] = result;
+        return next;
+      });
+      setRunResult({
+        status: result.passed ? 'Accepted' : 'Wrong Answer',
+        stdout: result.actual || '',
+        stderr: result.error || '',
+        time: result.time || undefined,
+        memory: result.memory ?? undefined,
+      });
+      setTab('console');
     } catch (e) { setError(e instanceof Error ? e.message : String(e)); }
-    finally { setBusy(false); }
+    finally { busyRef.current = false; setBusy(false); }
   };
 
   const visualize = async () => {
@@ -1107,7 +1125,7 @@ function App() {
           </div>
           {error && <div className="error-box">{error}</div>}
           {tab === 'tests' && <ResultsPanel results={results} onPick={setActiveTest} />}
-          {tab === 'console' && <ConsolePanel runResult={runResult} />}
+          {tab === 'console' && <ConsolePanel runResult={runResult} expected={tests[activeTest]?.expected} activeTest={activeTest} />}
           {tab === 'debugger' && <DebuggerPanel visual={visual} step={step} onStep={setStep} code={code} />}
           <div className={tab === 'ai' ? 'output-content' : 'output-content hidden'}>
             <AITutor
