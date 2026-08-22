@@ -198,6 +198,7 @@ function App() {
   const languageRef = useRef<Language>('python');
   const testsRef = useRef<TestCase[]>([]);
   const stubCodeRef = useRef(''); // the AI-generated stub to restore on Reset
+  const hiddenTestsRef = useRef<TestCase[]>([]); // hidden test cases — only run on Submit
 
   useEffect(() => { api.health().then(h => setAiEnabled(!!h.ai)).catch(() => {}); }, []);
 
@@ -241,9 +242,12 @@ function App() {
 
     // Extract examples from the problem and add as test cases
     const exampleTests = buildTestCasesFromExamples(parsed.examples);
-    const initialTests = exampleTests.map(t => ({ id: nextId++, input: t.input, expected: t.expected }));
+    const initialTests = exampleTests.map(t => ({ id: nextId++, input: t.input, expected: t.expected, hidden: false }));
     testsRef.current = initialTests;
     setTests(initialTests);
+
+    // Store hidden test cases separately — only run on Submit
+    hiddenTestsRef.current = [];
 
     // Clear everything: results, console, AI tutor, visualizer
     setResults([]);
@@ -314,42 +318,40 @@ function App() {
     })();
   }, [sigLoading, parsed]);
 
-  // Generate test cases (+ stub if no examples) via AI — triggered by the ⚡ Generate button.
-  // Shows whenever there are zero test cases. Can be cancelled via the ✕ Stop button.
+  // Generate test cases via AI — adds 10 test cases to the list each time it's clicked
   const generateTests = async () => {
     if (!parsed) return;
-    setTests([]);
-    setResults([]);
     setGenTestsLoading(true);
     genAbortRef.current?.abort();
     genAbortRef.current = new AbortController();
     const ac = genAbortRef.current;
+    const problemDesc = parsed.description || parsed.title;
+    const existingCount = testsRef.current.length;
     try {
-      if (parsed.examples.length > 0) {
+      let newTests: TestCase[] = [];
+      if (parsed.examples.length > 0 || existingCount > 0) {
         const res = await api.ai('gen_tests', {
           code: '', language: 'python',
-          problem: parsed.description || parsed.title,
+          problem: problemDesc + (existingCount > 0
+            ? `\n\nAlready have ${existingCount} test cases. Generate 10 NEW different test cases (edge cases, stress tests, boundary conditions). Do NOT repeat existing ones.`
+            : '\n\nGenerate 10 diverse test cases including basic cases and edge cases.'),
         }, ac.signal);
-        // gen_tests returns a JSON array — repair and parse
         let raw = res.text.trim();
         const fenceMatch = raw.match(/```(?:json)?\s*\n?([\s\S]*?)\n?```/);
         if (fenceMatch) raw = fenceMatch[1].trim();
-        // Remove trailing commas and extract array
         raw = raw.replace(/,\s*([}\]])/g, '$1');
         const arrMatch = raw.match(/\[[\s\S]*\]/);
         if (arrMatch) raw = arrMatch[0];
         const arr = JSON.parse(raw);
         if (Array.isArray(arr) && arr.length > 0) {
-          setTests(arr.map((g: { input: string; expected: string }) => ({
-            id: nextId++, input: g.input, expected: g.expected,
-          })));
-          setActiveTest(0);
-          setResults([]);
+          newTests = arr.slice(0, 10).map((g: { input: string; expected: string }) => ({
+            id: nextId++, input: g.input, expected: g.expected, hidden: false,
+          }));
         }
       } else {
         const res = await api.ai('gen_stub_and_tests', {
           code: '', language: 'python',
-          problem: parsed.description || parsed.title,
+          problem: problemDesc,
         }, ac.signal);
         const obj = repairJSON(res.text);
         if (obj.function_name && Array.isArray(obj.params)) {
@@ -358,14 +360,20 @@ function App() {
           setLanguage('python');
         }
         if (Array.isArray(obj.test_cases) && obj.test_cases.length > 0) {
-          setTests(obj.test_cases.map((g: { input: string; expected: string }) => ({
-            id: nextId++, input: g.input, expected: g.expected,
-          })));
-          setActiveTest(0);
-          setResults([]);
+          newTests = obj.test_cases.slice(0, 10).map((g: { input: string; expected: string }) => ({
+            id: nextId++, input: g.input, expected: g.expected, hidden: false,
+          }));
         }
       }
-    } catch { /* AI failed, returned invalid JSON, or was cancelled */ }
+      // Append to existing tests (don't replace)
+      if (newTests.length > 0) {
+        const combined = [...testsRef.current, ...newTests];
+        testsRef.current = combined;
+        setTests(combined);
+        if (existingCount === 0) setActiveTest(0);
+        setResults([]);
+      }
+    } catch { /* AI failed or cancelled */ }
     finally { setGenTestsLoading(false); }
   };
 
@@ -647,54 +655,64 @@ function App() {
   })();
 
   const runTest = async () => {
-    if (tests.length === 0) {
-      setShowNoTestsModal(true);
-      return;
-    }
-    if (!hasRealCode) {
-      showToast('Write some code before submitting. The editor only has a stub with "pass".');
-      return;
-    }
-    setBusy(true); setError('');
     try {
+      if (busyRef.current) return;
+      if (tests.length === 0) {
+        setShowNoTestsModal(true);
+        return;
+      }
+      if (!hasRealCode) {
+        showToast('Write some code before submitting. The editor only has a stub with "pass".');
+        return;
+      }
+      busyRef.current = true; setBusy(true); setError('');
+      // Submit runs all visible test cases
       const data = await api.test(language, fullCode, tests);
       setResults(data.results); setTab('tests');
     } catch (e) { setError(e instanceof Error ? e.message : String(e)); }
-    finally { setBusy(false); }
+    finally { busyRef.current = false; setBusy(false); }
   };
 
   const runOne = async (i: number) => {
-    if (!hasRealCode) {
-      showToast('Write some code before running. The editor only has a stub with "pass".');
-      return;
-    }
-    setBusy(true); setError('');
     try {
+      if (busyRef.current) return;
+      if (!hasRealCode) {
+        showToast('Write some code before running. The editor only has a stub with "pass".');
+        return;
+      }
+      busyRef.current = true; setBusy(true); setError('');
+      // Run ONLY this one test case — don't run or show others
       const data = await api.test(language, fullCode, [tests[i]]);
-      setResults(prev => prev.map((r, idx) => idx === i ? data.results[0] : r));
+      const result = data.results[0];
+      // Only set the result for this one test — don't fill other slots
+      setResults(prev => {
+        const next = [...prev];
+        next[i] = result;
+        return next;
+      });
       setActiveTest(i); setTab('tests');
     } catch (e) { setError(e instanceof Error ? e.message : String(e)); }
-    finally { setBusy(false); }
+    finally { busyRef.current = false; setBusy(false); }
   };
 
   const runCode = async () => {
-    if (busyRef.current) return;
-    if (tests.length === 0) {
-      setShowNoTestsModal(true);
-      return;
-    }
-    if (!hasRealCode) {
-      showToast('Write some code before running. The editor only has a stub with "pass".');
-      return;
-    }
-    busyRef.current = true; setBusy(true); setError('');
     try {
-      // Run the active test case and compare against expected output
+      if (busyRef.current) return;
+      if (tests.length === 0) {
+        setShowNoTestsModal(true);
+        return;
+      }
+      if (!hasRealCode) {
+        showToast('Write some code before running. The editor only has a stub with "pass".');
+        return;
+      }
+      busyRef.current = true; setBusy(true); setError('');
+      // Run ONLY the active test case — do not touch other test results
       const data = await api.test(language, fullCode, [tests[activeTest]]);
       const result = data.results[0];
+      // Only update the active test's result, leave others unchanged
       setResults(prev => {
         const next = [...prev];
-        while (next.length < tests.length) next.push({ ...tests[next.length], passed: false, actual: '' });
         next[activeTest] = result;
         return next;
       });
@@ -711,12 +729,13 @@ function App() {
   };
 
   const visualize = async () => {
-    if (!hasRealCode) {
-      showToast('Write some code before visualizing. The editor only has a stub with "pass".');
-      return;
-    }
-    setBusy(true); setError('');
     try {
+      if (busyRef.current) return;
+      if (!hasRealCode) {
+        showToast('Write some code before visualizing. The editor only has a stub with "pass".');
+        return;
+      }
+      busyRef.current = true; setBusy(true); setError('');
       const data = await api.visualize(language, fullCode, tests[activeTest]?.input || '');
       // Filter out steps that fall in the hidden harness (line > solution line count)
       // so Monaco highlighting and line display map to the visible solution code only.
@@ -727,7 +746,7 @@ function App() {
       };
       setVisual(filtered); setStep(0); setTab('debugger');
     } catch (e) { setError(e instanceof Error ? e.message : String(e)); }
-    finally { setBusy(false); }
+    finally { busyRef.current = false; setBusy(false); }
   };
 
   const changeLanguage = (next: Language) => {
@@ -892,6 +911,7 @@ function App() {
         }
       } catch { /* ignore */ }
       testsRef.current = loadedTests;
+      hiddenTestsRef.current = [];
       setTests(loadedTests);
       setResults([]);
       setRunResult(null);
@@ -936,6 +956,7 @@ function App() {
         parsedRef.current = null;
         resultsRef.current = [];
         testsRef.current = [];
+        hiddenTestsRef.current = [];
         languageRef.current = 'python';
         setProblem('');
         setCodeAndClearHistory(starter[language]);
@@ -976,6 +997,8 @@ function App() {
       codeRef.current = starter[language];
       parsedRef.current = null;
       resultsRef.current = [];
+      testsRef.current = [];
+      hiddenTestsRef.current = [];
       setProblem('');
       setCodeAndClearHistory(starter[language]);
       setHarness('');

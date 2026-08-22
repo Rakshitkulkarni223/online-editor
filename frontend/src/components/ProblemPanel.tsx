@@ -117,9 +117,7 @@ export function ProblemPanel(props: Props) {
           {genTestsLoading ? (
             <button className="icon-button stop-btn" onClick={onCancelGenerate}>✕ Stop</button>
           ) : (
-            tests.length === 0 && (
-              <button className="icon-button" onClick={onGenerateTests} disabled={!parsed}>⚡ Generate</button>
-            )
+            <button className="icon-button" onClick={onGenerateTests} disabled={!parsed} title="Generate 10 more test cases with AI">⚡ Generate</button>
           )}
           <button className="icon-button" onClick={addTest} disabled={genTestsLoading}>＋ Add</button>
         </div>
@@ -132,7 +130,7 @@ export function ProblemPanel(props: Props) {
           </div>
         )}
         {!genTestsLoading && tests.length === 0 && (
-          <div className="muted" style={{ padding: '12px', textAlign: 'center' }}>No test cases yet. Click ⚡ Generate (AI) or ＋ Add.</div>
+          <div className="muted" style={{ padding: '12px', textAlign: 'center' }}>No test cases yet. Click ⚡ Generate to add 10 cases with AI, or ＋ Add manually.</div>
         )}
         {!genTestsLoading && tests.map((t, i) => (
           <div key={t.id} className={'test-card' + (activeTest === i ? ' active' : '')} onClick={() => onActiveTest(i)}>

@@ -2,23 +2,26 @@ import React from 'react';
 import type { RunResponse, TestResult } from '../types';
 
 export function ResultsPanel({ results, onPick }: { results: TestResult[]; onPick: (i: number) => void }) {
-  const passed = results.filter(r => r.passed).length;
-  if (!results.length) {
+  // Only count tests that actually have results (have been run)
+  const runResults = results.filter(r => r && r.actual !== undefined && r.actual !== '');
+  const passed = runResults.filter(r => r.passed).length;
+  if (!runResults.length) {
     return <div className="output-content"><Empty icon="🧪" title="No tests run" text="Add cases on the left, then press Submit." /></div>;
   }
+  const allPassed = passed === runResults.length;
   return (
     <div className="output-content">
       <div className="score">
-        <div><strong>{passed}/{results.length}</strong><span>test cases passed</span></div>
-        <div className={passed === results.length ? 'score-good' : 'score-bad'}>
-          {passed === results.length ? 'Accepted' : 'Wrong Answer'}
+        <div><strong>{passed}/{runResults.length}</strong><span>test cases passed</span></div>
+        <div className={allPassed ? 'score-good' : 'score-bad'}>
+          {allPassed ? 'Accepted' : 'Wrong Answer'}
         </div>
       </div>
-      {results.map((r, i) => (
+      {results.map((r, i) => r && r.actual !== undefined && r.actual !== '' && (
         <div className="result-row" key={r.id}>
           <span className={r.passed ? 'dot pass-bg' : 'dot fail-bg'} />
           <div>
-            <b>Case {i + 1}{r.hidden ? ' · hidden' : ''}</b>
+            <b>Case {i + 1}</b>
             <small>{r.passed ? 'Passed' : 'Failed'} {r.time ? `· ${r.time}s` : ''}</small>
           </div>
           <button onClick={() => onPick(i)}>{r.passed ? '✓' : 'View'}</button>

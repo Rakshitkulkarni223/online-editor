@@ -488,7 +488,7 @@ def _ai_prompt(req: AIRequest) -> str:
         if req.action == "gen_tests":
             return (
                 f"Problem:\n{req.problem}\n\nFunction signature context: {req.code[:600]}\n\n"
-                "Generate 5 diverse test cases (edge cases included). "
+                "Generate 10 diverse test cases (include basic cases, edge cases, boundary conditions). "
                 "Return ONLY a JSON array of {\"input\": \"...\", \"expected\": \"...\"}."
             )
         if req.action == "gen_stub_and_tests":
@@ -504,7 +504,9 @@ def _ai_prompt(req: AIRequest) -> str:
                 "Rules:\n"
                 "- function_name: descriptive camelCase, derived from the problem (e.g. 'addTwoNumbers', 'longestSubstring', 'maxCoins')\n"
                 "- params: infer from the problem description. Use 'a', 'b' for unnamed inputs.\n"
-                '- test_cases: 3-5 cases including edge cases. input must use "name = value" format parseable by ast.literal_eval.\n'
+                '- test_cases: generate 50 cases. First 5 should be simple/straightforward. '
+                'Remaining 45 should cover edge cases, stress tests, boundary conditions. '
+                'input must use "name = value" format parseable by ast.literal_eval.\n'
                 '- expected: string representation of the expected output (e.g. "3", "[0,1]", "true", "\\"abc\\"").\n'
             )
         if req.action == "gen_signature":
