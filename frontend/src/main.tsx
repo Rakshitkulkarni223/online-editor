@@ -114,6 +114,18 @@ function App() {
   const [sidebarCollapsed, setSidebarCollapsed] = useState(true); // overlay — starts collapsed
   const [sidebarRefreshKey, setSidebarRefreshKey] = useState(0);
   const [currentProblemId, setCurrentProblemId] = useState<number | null>(null);
+  // Sync URL with current problem ID — uses pushState so back/forward navigation works
+  const updateUrl = (id: number | null) => {
+    try {
+      const url = new URL(window.location.href);
+      if (id !== null) {
+        url.searchParams.set('id', String(id));
+      } else {
+        url.searchParams.delete('id');
+      }
+      window.history.pushState({}, '', url.toString());
+    } catch { /* ignore */ }
+  };
   const [saveStatus, setSaveStatus] = useState<'idle' | 'saving' | 'saved'>('idle');
   const [panelKey, setPanelKey] = useState(0); // forces ProblemPanel remount on sidebar load
   const [functionName, setFunctionName] = useState(''); // AI-generated function name for title
@@ -201,6 +213,53 @@ function App() {
   const hiddenTestsRef = useRef<TestCase[]>([]); // hidden test cases — only run on Submit
 
   useEffect(() => { api.health().then(h => setAiEnabled(!!h.ai)).catch(() => {}); }, []);
+
+  // On initial page load: if URL has ?id=xxx, load that problem from DB
+  useEffect(() => {
+    try {
+      const params = new URLSearchParams(window.location.search);
+      const idParam = params.get('id');
+      if (idParam) {
+        const id = parseInt(idParam, 10);
+        if (!isNaN(id)) {
+          loadingFromSidebarRef.current = true;
+          api.getProblem(id).then(p => {
+            loadProblem(p);
+          }).catch(() => {
+            updateUrl(null);
+            loadingFromSidebarRef.current = false;
+          });
+        }
+      }
+    } catch { /* ignore */ }
+  }, []);
+
+  // Handle browser back/forward navigation
+  useEffect(() => {
+    const onPopState = () => {
+      try {
+        const params = new URLSearchParams(window.location.search);
+        const idParam = params.get('id');
+        if (idParam) {
+          const id = parseInt(idParam, 10);
+          if (!isNaN(id) && id !== currentProblemIdRef.current) {
+            loadingFromSidebarRef.current = true;
+            api.getProblem(id).then(p => {
+              loadProblem(p);
+            }).catch(() => {
+              updateUrl(null);
+              loadingFromSidebarRef.current = false;
+            });
+          }
+        } else if (currentProblemIdRef.current !== null) {
+          // No ID in URL — go to new problem mode
+          newProblem();
+        }
+      } catch { /* ignore */ }
+    };
+    window.addEventListener('popstate', onPopState);
+    return () => window.removeEventListener('popstate', onPopState);
+  }, []);
 
   // Keep refs in sync with state for auto-save (avoids stale closures)
   useEffect(() => { problemRef.current = problem; }, [problem]);
@@ -832,6 +891,7 @@ function App() {
         const res = await api.saveProblem(payload);
         currentProblemIdRef.current = res.id;
         setCurrentProblemId(res.id);
+        updateUrl(res.id);
       }
       setSaveStatus('saved');
       setSidebarRefreshKey(k => k + 1);
@@ -879,6 +939,7 @@ function App() {
       sigAbortRef.current?.abort();
       currentProblemIdRef.current = p.id;
       setCurrentProblemId(p.id);
+      updateUrl(p.id);
       const text = p.problem_text || p.title;
       // Update refs immediately so auto-save doesn't fire with stale data
       problemRef.current = text;
@@ -961,6 +1022,7 @@ function App() {
         sigAbortRef.current?.abort();
         currentProblemIdRef.current = null;
         setCurrentProblemId(null);
+        updateUrl(null);
         problemRef.current = '';
         codeRef.current = starter[language];
         parsedRef.current = null;
@@ -1003,6 +1065,7 @@ function App() {
       sigAbortRef.current?.abort();
       currentProblemIdRef.current = null;
       setCurrentProblemId(null);
+      updateUrl(null);
       problemRef.current = '';
       codeRef.current = starter[language];
       parsedRef.current = null;
@@ -1042,6 +1105,7 @@ function App() {
         });
         currentProblemIdRef.current = res.id;
         setCurrentProblemId(res.id);
+        updateUrl(res.id);
         setSidebarRefreshKey(k => k + 1);
       } catch { /* ignore */ }
     } catch { /* ignore */ }
@@ -1106,7 +1170,13 @@ function App() {
           parsed={parsed}
           onParsed={setParsed}
           tests={tests}
-          onTests={setTests}
+          onTests={(updater) => {
+            setTests(prev => {
+              const next = typeof updater === 'function' ? updater(prev) : updater;
+              testsRef.current = next;
+              return next;
+            });
+          }}
           results={results}
           activeTest={activeTest}
           onActiveTest={setActiveTest}

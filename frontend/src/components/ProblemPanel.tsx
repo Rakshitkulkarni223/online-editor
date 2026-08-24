@@ -8,7 +8,7 @@ type Props = {
   parsed: ParsedProblem | null;
   onParsed: (p: ParsedProblem | null) => void;
   tests: TestCase[];
-  onTests: (t: TestCase[]) => void;
+  onTests: (t: TestCase[] | ((prev: TestCase[]) => TestCase[])) => void;
   results: TestResult[];
   activeTest: number;
   onActiveTest: (i: number) => void;
@@ -48,13 +48,10 @@ export function ProblemPanel(props: Props) {
   // Edit: go back to the raw textarea
   const doEdit = () => setShowRaw(true);
 
-  const addTest = () => {
-    console.log('[AddTest] current tests:', tests.length, 'nextId:', nextId);
-    onTests([...tests, { id: nextId++, input: '', expected: '' }]);
-  };
+  const addTest = () => onTests(prev => [...prev, { id: nextId++, input: '', expected: '' }]);
   const updateTest = (i: number, key: keyof TestCase, value: string | boolean) =>
-    onTests(tests.map((t, idx) => (idx === i ? { ...t, [key]: value } : t)));
-  const deleteTest = (i: number) => onTests(tests.filter((_, idx) => idx !== i));
+    onTests(prev => prev.map((t, idx) => (idx === i ? { ...t, [key]: value } : t)));
+  const deleteTest = (i: number) => onTests(prev => prev.filter((_, idx) => idx !== i));
 
   return (
     <aside className="problem-panel">
