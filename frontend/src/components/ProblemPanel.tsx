@@ -48,7 +48,10 @@ export function ProblemPanel(props: Props) {
   // Edit: go back to the raw textarea
   const doEdit = () => setShowRaw(true);
 
-  const addTest = () => onTests([...tests, { id: nextId++, input: '', expected: '' }]);
+  const addTest = () => {
+    console.log('[AddTest] current tests:', tests.length, 'nextId:', nextId);
+    onTests([...tests, { id: nextId++, input: '', expected: '' }]);
+  };
   const updateTest = (i: number, key: keyof TestCase, value: string | boolean) =>
     onTests(tests.map((t, idx) => (idx === i ? { ...t, [key]: value } : t)));
   const deleteTest = (i: number) => onTests(tests.filter((_, idx) => idx !== i));
@@ -115,11 +118,11 @@ export function ProblemPanel(props: Props) {
         <span>Test Cases</span>
         <div className="test-actions">
           {genTestsLoading ? (
-            <button className="icon-button stop-btn" onClick={onCancelGenerate}>✕ Stop</button>
+            <button type="button" className="icon-button stop-btn" onClick={onCancelGenerate}>✕ Stop</button>
           ) : (
-            <button className="icon-button" onClick={onGenerateTests} disabled={!parsed} title="Generate 10 more test cases with AI">⚡ Generate</button>
+            <button type="button" className="icon-button" onClick={onGenerateTests} disabled={!parsed} title="Generate 10 more test cases with AI">⚡ Generate</button>
           )}
-          <button className="icon-button" onClick={addTest} disabled={genTestsLoading}>＋ Add</button>
+          <button type="button" className="icon-button" onClick={addTest} disabled={genTestsLoading}>＋ Add</button>
         </div>
       </div>
       <div className="tests-list">
@@ -138,9 +141,9 @@ export function ProblemPanel(props: Props) {
               <span>Case {i + 1}{t.hidden ? ' · hidden' : ''}</span>
               <div className="test-title-actions">
                 {results[i] && <span className={results[i].passed ? 'pass' : 'fail'}>{results[i].passed ? '✓' : '×'}</span>}
-                <button className="icon-button mini" title="Run this case" onClick={e => { e.stopPropagation(); onRunOne(i); }}>▶</button>
-                <button className="icon-button mini" title="Toggle hidden" onClick={e => { e.stopPropagation(); updateTest(i, 'hidden', !t.hidden); }}>{t.hidden ? '👁' : '🙈'}</button>
-                <button className="icon-button mini" title="Delete" onClick={e => { e.stopPropagation(); deleteTest(i); }}>✕</button>
+                <button type="button" className="icon-button mini" title="Run this case" onClick={e => { e.stopPropagation(); onRunOne(i); }}>▶</button>
+                <button type="button" className="icon-button mini" title="Toggle hidden" onClick={e => { e.stopPropagation(); updateTest(i, 'hidden', !t.hidden); }}>{t.hidden ? '👁' : '🙈'}</button>
+                <button type="button" className="icon-button mini" title="Delete" onClick={e => { e.stopPropagation(); deleteTest(i); }}>✕</button>
               </div>
             </div>
             <label>Input<textarea value={t.input} onChange={e => { e.stopPropagation(); updateTest(i, 'input', e.target.value); }} placeholder="stdin / function input" /></label>

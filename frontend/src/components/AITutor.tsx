@@ -10,7 +10,6 @@ type Props = {
   tests: TestCase[];
   error: string;
   aiEnabled: boolean;
-  onGeneratedTests: (tests: { input: string; expected: string }[]) => void;
 };
 
 const ACTIONS: { action: AIAction; label: string; icon: string; needsCode: boolean }[] = [
@@ -18,12 +17,11 @@ const ACTIONS: { action: AIAction; label: string; icon: string; needsCode: boole
   { action: 'approach', label: 'Explain approach', icon: '🧭', needsCode: false },
   { action: 'explain_line', label: 'Explain this line', icon: '📖', needsCode: true },
   { action: 'find_mistake', label: 'Find my mistake', icon: '🐞', needsCode: true },
-  { action: 'gen_tests', label: 'Generate test cases', icon: '🧪', needsCode: false },
   { action: 'complexity', label: 'Complexity analysis', icon: '⏱', needsCode: true },
 ];
 
 export function AITutor(props: Props) {
-  const { code, language, problem, currentLine, tests, error, aiEnabled, onGeneratedTests } = props;
+  const { code, language, problem, currentLine, tests, error, aiEnabled } = props;
   const [text, setText] = useState('');
   const [busy, setBusy] = useState(false);
   const [msg, setMsg] = useState('');
@@ -45,20 +43,6 @@ export function AITutor(props: Props) {
         tests: tests.map(t => ({ input: t.input, expected: t.expected })),
         error,
       });
-      if (action === 'gen_tests') {
-        try {
-          // Strip markdown code fences if present (backend usually does this, but be safe)
-          let raw = res.text.trim();
-          const fenceMatch = raw.match(/```(?:json)?\s*\n?([\s\S]*?)\n?```/);
-          if (fenceMatch) raw = fenceMatch[1].trim();
-          const arr = JSON.parse(raw);
-          if (Array.isArray(arr)) {
-            onGeneratedTests(arr);
-            setText(`Added ${arr.length} generated test cases to your list.`);
-            return;
-          }
-        } catch { /* fall through to show raw */ }
-      }
       setText(res.text);
     } catch (e) {
       setMsg(e instanceof Error ? e.message : String(e));

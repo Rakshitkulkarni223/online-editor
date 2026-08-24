@@ -320,14 +320,18 @@ function App() {
 
   // Generate test cases via AI — adds 10 test cases to the list each time it's clicked
   const generateTests = async () => {
-    if (!parsed) return;
-    setGenTestsLoading(true);
-    genAbortRef.current?.abort();
-    genAbortRef.current = new AbortController();
-    const ac = genAbortRef.current;
-    const problemDesc = parsed.description || parsed.title;
-    const existingCount = testsRef.current.length;
     try {
+      if (!parsed) {
+        showToast('Parse a problem first before generating test cases.');
+        return;
+      }
+      if (genTestsLoading) return;
+      setGenTestsLoading(true);
+      genAbortRef.current?.abort();
+      genAbortRef.current = new AbortController();
+      const ac = genAbortRef.current;
+      const problemDesc = parsed.description || parsed.title;
+      const existingCount = testsRef.current.length;
       let newTests: TestCase[] = [];
       if (parsed.examples.length > 0 || existingCount > 0) {
         const res = await api.ai('gen_tests', {
@@ -373,8 +377,14 @@ function App() {
         if (existingCount === 0) setActiveTest(0);
         setResults([]);
       }
-    } catch { /* AI failed or cancelled */ }
-    finally { setGenTestsLoading(false); }
+    } catch (e) {
+      // AI failed or cancelled — show error if not an abort
+      if (e instanceof Error && e.name !== 'AbortError') {
+        showToast('Failed to generate test cases: ' + e.message);
+      }
+    } finally {
+      setGenTestsLoading(false);
+    }
   };
 
   // Cancel ongoing AI test case generation
@@ -1160,7 +1170,6 @@ function App() {
               tests={tests}
               error={error || (visual?.stderr || '')}
               aiEnabled={aiEnabled}
-              onGeneratedTests={(gen) => setTests(prev => [...prev, ...gen.map(g => ({ id: nextId++, input: g.input, expected: g.expected }))])}
             />
           </div>
         </aside>
