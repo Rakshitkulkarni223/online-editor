@@ -10,6 +10,7 @@ from typing import Any
 import httpx
 from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import Response
 from pydantic import BaseModel
 from dotenv import load_dotenv
 
@@ -295,26 +296,37 @@ __CT_STACK = []  # list of func names
 __CT_FILE = __file__
 __CT_OFFSET = 0  # 1-based file line of the first user code line
 
-def __ct_value(v):
+def __ct_value(v, _depth=0, _seen=None):
     """Return a JSON-serializable, typed description of a local variable."""
+    if _seen is None:
+        _seen = set()
+    if _depth > 15:
+        return {"type": type(v).__name__ if hasattr(v, '__class__') else "unknown", "value": None, "repr": "..."}
     try:
         if isinstance(v, (int, float, bool, str)) or v is None:
             t = type(v).__name__
+            if isinstance(v, float) and (v != v or v == float('inf') or v == float('-inf')):
+                return {"type": t, "value": None, "repr": repr(v)}
             return {"type": t, "value": v if not isinstance(v, bool) else v}
+        vid = id(v)
+        if vid in _seen:
+            return {"type": type(v).__name__, "value": None, "repr": "<cycle>"}
+        _seen.add(vid)
         if isinstance(v, (list, tuple)):
-            return {"type": "list", "value": [__ct_value(x) for x in v]}
+            return {"type": "list", "value": [__ct_value(x, _depth+1, _seen) for x in v[:200]]}
         if isinstance(v, set):
-            return {"type": "set", "value": [__ct_value(x) for x in sorted(v, key=repr)]}
+            return {"type": "set", "value": [__ct_value(x, _depth+1, _seen) for x in sorted(list(v)[:200], key=repr)]}
         if isinstance(v, dict):
+            items = list(v.items())[:100]
             return {"type": "dict", "value": [
-                {"key": __ct_value(k), "val": __ct_value(val)} for k, val in v.items()
+                {"key": __ct_value(k, _depth+1, _seen), "val": __ct_value(val, _depth+1, _seen)} for k, val in items
             ]}
         # Generic object with attributes (e.g. ListNode, TreeNode)
         attrs = {}
         try:
             for name in vars(v):
                 if not name.startswith("_"):
-                    attrs[name] = __ct_value(getattr(v, name))
+                    attrs[name] = __ct_value(getattr(v, name), _depth+1, _seen)
         except TypeError:
             attrs = {}
         return {"type": type(v).__name__, "value": attrs, "repr": repr(v)}
@@ -327,6 +339,11 @@ def __ct_locals(frame):
     for k, v in frame.f_locals.items():
         if k.startswith("__") or k.startswith("_CT") or k.startswith("__ct"):
             continue
+        # Skip module imports and harness-internal names at module scope
+        if type(v).__name__ == 'module':
+            continue
+        if k.startswith('_') and frame.f_code.co_name == '<module>':
+            continue
         out[k] = __ct_value(v)
     return out
 
@@ -335,11 +352,12 @@ def __trace(frame, event, arg):
     try:
         fname = frame.f_code.co_filename
         if fname != __CT_FILE:
-            return __trace
+            return None
         func = frame.f_code.co_name
-        # Skip tracer-internal helper frames so they don't pollute the trace.
-        if func.startswith("__ct") or func == "__trace":
-            return __trace
+        # Skip dunder methods (__init__, __new__, etc.) and harness helpers (_build_tree, etc.)
+        # Returning None tells Python: do NOT trace into this function at all.
+        if func.startswith("_"):
+            return None
         if event == "call":
             __CT_STACK.append(func)
             return __trace
@@ -348,24 +366,35 @@ def __trace(frame, event, arg):
                 __CT_STACK.pop()
             return __trace
         if event == "line":
-            __CT_STEPS.append({
-                "line": frame.f_lineno - __CT_OFFSET + 1,
-                "locals": __ct_locals(frame),
-                "callStack": list(__CT_STACK),
-                "event": "line",
-            })
+            if len(__CT_STEPS) < 500:
+                __CT_STEPS.append({
+                    "line": frame.f_lineno - __CT_OFFSET + 1,
+                    "locals": __ct_locals(frame),
+                    "callStack": list(__CT_STACK),
+                    "event": "line",
+                })
     except Exception:
         pass
     return __trace
 
 
 sys.settrace(__trace)
+# Also enable tracing on the current (module) frame so top-level lines are captured
+try:
+    sys._getframe().f_trace = __trace
+except Exception:
+    pass
 try:
 __BODY__
 finally:
     sys.settrace(None)
     sys.stdout.flush()
-    sys.stdout.write("__CODETRACE__" + json.dumps(__CT_STEPS, default=repr))
+    def __ct_default(o):
+        try:
+            return repr(o)
+        except Exception:
+            return "<unserializable>"
+    sys.stdout.write("__CODETRACE__" + json.dumps(__CT_STEPS, default=__ct_default, allow_nan=False).replace("NaN", "null").replace("Infinity", "null"))
 '''
 
 
@@ -379,24 +408,33 @@ def _build_traced_source(user_code: str, stdin: str) -> str:
 
 @app.post("/visualize")
 async def visualize(req: RunRequest):
-    if req.language != "python":
-        # Non-Python visualization isn't supported by the local tracer.
-        raise HTTPException(
-            400,
-            "Step-by-step visualization currently supports Python. "
-            "Run/Submit supports Python, JavaScript, Java and C++.",
+    try:
+        if req.language != "python":
+            raise HTTPException(
+                400,
+                "Step-by-step visualization currently supports Python. "
+                "Run/Submit supports Python, JavaScript, Java and C++.",
+            )
+        src = _build_traced_source(req.code, req.stdin)
+        loop = asyncio.get_event_loop()
+        steps, stdout, stderr, status = await loop.run_in_executor(
+            None, _run_python_locally, src, req.stdin
         )
-    src = _build_traced_source(req.code, req.stdin)
-    loop = asyncio.get_event_loop()
-    steps, stdout, stderr, status = await loop.run_in_executor(
-        None, _run_python_locally, src, req.stdin
-    )
-    return {
-        "status": status,
-        "stdout": stdout.strip(),
-        "stderr": stderr,
-        "steps": steps,
-    }
+        payload = {
+            "status": status,
+            "stdout": stdout.strip(),
+            "stderr": stderr,
+            "steps": steps,
+        }
+        # Use allow_nan + replace to guarantee JSON-safe output
+        body = json.dumps(payload, default=repr, allow_nan=True)
+        body = body.replace(": NaN", ": null").replace(": Infinity", ": null").replace(": -Infinity", ": null")
+        return Response(content=body, media_type="application/json")
+    except HTTPException:
+        raise
+    except Exception as e:
+        payload = {"status": "Error", "stdout": "", "stderr": str(e), "steps": []}
+        return Response(content=json.dumps(payload), media_type="application/json")
 
 
 def _run_python_locally(src: str, stdin: str) -> tuple[list, str, str, str]:

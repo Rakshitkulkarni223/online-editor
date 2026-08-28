@@ -1,7 +1,7 @@
 import React, { useEffect, useRef, useState } from 'react';
 import type { Step, VisualResponse } from '../types';
 import {
-  VariablesPanel, CallStackView, DSAVisualizer, detectDSA,
+  VariablesPanel, PersistentDSAVisualizer,
 } from '../visualizers';
 
 type Props = {
@@ -9,14 +9,15 @@ type Props = {
   step: number;
   onStep: (n: number) => void;
   code: string;
+  testInput?: string;
 };
 
-export function DebuggerPanel({ visual, step, onStep, code }: Props) {
+export function DebuggerPanel({ visual, step, onStep, code, testInput = '' }: Props) {
   const [auto, setAuto] = useState(false);
+  const [speed, setSpeed] = useState(600);
   const timerRef = useRef<number | null>(null);
   const steps = visual?.steps || [];
   const current = steps[step];
-  const detection = current ? detectDSA(current.locals) : null;
 
   useEffect(() => {
     if (!auto) {
@@ -26,10 +27,10 @@ export function DebuggerPanel({ visual, step, onStep, code }: Props) {
     if (step >= steps.length - 1) { setAuto(false); return; }
     timerRef.current = window.setInterval(() => {
       onStep(step + 1);
-    }, 600);
+    }, speed);
     return () => { if (timerRef.current) window.clearInterval(timerRef.current); };
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [auto, step, steps.length]);
+  }, [auto, step, steps.length, speed]);
 
   if (!steps.length) {
     return (
@@ -46,11 +47,17 @@ export function DebuggerPanel({ visual, step, onStep, code }: Props) {
       <div className="viz-head">
         <div><strong>Step {step + 1}</strong><span> of {steps.length}</span></div>
         <div className="viz-controls">
-          <button disabled={step === 0} onClick={() => { setAuto(false); onStep(0); }}>⏮</button>
-          <button disabled={step === 0} onClick={() => { setAuto(false); onStep(step - 1); }}>←</button>
-          <button disabled={step === steps.length - 1} onClick={() => { setAuto(false); onStep(step + 1); }}>→</button>
-          <button disabled={step === steps.length - 1} onClick={() => { setAuto(false); onStep(steps.length - 1); }}>⏭</button>
-          <button className={auto ? 'active' : ''} onClick={() => setAuto(a => !a)}>{auto ? '⏸ Pause' : '▶ Auto'}</button>
+          <button disabled={step === 0} onClick={() => { setAuto(false); onStep(0); }} title="First step">⏮</button>
+          <button disabled={step === 0} onClick={() => { setAuto(false); onStep(step - 1); }} title="Previous">←</button>
+          <button className={auto ? 'active' : ''} onClick={() => setAuto(a => !a)} title={auto ? 'Pause' : 'Play'}>{auto ? '⏸' : '▶'}</button>
+          <button disabled={step === steps.length - 1} onClick={() => { setAuto(false); onStep(step + 1); }} title="Next">→</button>
+          <button disabled={step === steps.length - 1} onClick={() => { setAuto(false); onStep(steps.length - 1); }} title="Last step">⏭</button>
+          <select className="speed-select" value={speed} onChange={e => setSpeed(Number(e.target.value))} title="Animation speed">
+            <option value={1200}>0.5x</option>
+            <option value={600}>1x</option>
+            <option value={300}>2x</option>
+            <option value={150}>4x</option>
+          </select>
         </div>
       </div>
       <input className="timeline" type="range" min={0} max={steps.length - 1} value={step} onChange={e => { setAuto(false); onStep(Number(e.target.value)); }} />
@@ -60,21 +67,14 @@ export function DebuggerPanel({ visual, step, onStep, code }: Props) {
         <pre className="trace-line-code">{lineText}</pre>
       </div>
 
-      {detection && detection.kind !== 'none' && (
-        <div className="trace-card">
-          <div className="trace-label">DSA VISUALIZER</div>
-          <DSAVisualizer locals={current!.locals} detection={detection} />
-        </div>
-      )}
+      <div className="trace-card">
+        <div className="trace-label">VISUALIZATION</div>
+        <PersistentDSAVisualizer steps={steps} stepIdx={step} testInput={testInput} />
+      </div>
 
       <div className="trace-card">
         <div className="trace-label">LOCAL VARIABLES</div>
         <VariablesPanel step={current} />
-      </div>
-
-      <div className="trace-card">
-        <div className="trace-label">CALL STACK</div>
-        <CallStackView stack={current?.callStack || []} />
       </div>
 
       {visual?.stdout && (

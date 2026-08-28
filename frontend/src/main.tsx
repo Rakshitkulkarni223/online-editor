@@ -132,6 +132,8 @@ function App() {
   const [problemTitle, setProblemTitle] = useState(''); // AI-generated human-readable title
   const [panelPreview, setPanelPreview] = useState(false); // start ProblemPanel in preview mode on next mount
   const [showNoTestsModal, setShowNoTestsModal] = useState(false); // popup when Run/Submit with no tests
+  const [showGenModal, setShowGenModal] = useState(false); // popup asking how many test cases to add
+  const [genCount, setGenCount] = useState(3); // number of test cases to add from popup
   const [toast, setToast] = useState<{ msg: string; type: 'error' | 'info' } | null>(null);
   const [panelWidths, setPanelWidths] = useState({ left: 27, middle: 45, right: 28 }); // percentages
 
@@ -293,20 +295,7 @@ function App() {
     }
 
     setParseError(''); // clear any previous error
-
-    // Clear the editor — don't write anything until AI responds
-    setCode('');
-    setHarness('');
     setLanguage('python');
-
-    // Extract examples from the problem and add as test cases
-    const exampleTests = buildTestCasesFromExamples(parsed.examples);
-    const initialTests = exampleTests.map(t => ({ id: nextId++, input: t.input, expected: t.expected, hidden: false }));
-    testsRef.current = initialTests;
-    setTests(initialTests);
-
-    // Store hidden test cases separately — only run on Submit
-    hiddenTestsRef.current = [];
 
     // Clear everything: results, console, AI tutor, visualizer
     setResults([]);
@@ -317,20 +306,48 @@ function App() {
     setGenTestsLoading(false);
     genAbortRef.current?.abort();
 
-    // Show loading indicator while AI identifies the function name + arguments
+    // Infer params + function name FIRST (needed for both stub and default test cases)
+    let stubParams: { name: string; type: string }[] = [];
+    let funcName = 'solve';
+    try {
+      funcName = inferFunctionName(parsed.description || parsed.title);
+      let params: { name: string; type: string }[] = [];
+      if (parsed.examples.length > 0) params = inferParams(parsed.examples[0].input);
+      if (params.length === 0) params = inferParamsFromDescription(parsed.description);
+      stubParams = params.length > 0 ? params : [{ name: 'data', type: 'int' }];
+    } catch { /* keep defaults */ }
+
+    // Generate code stub + harness IMMEDIATELY (no AI dependency)
+    try {
+      const stub = buildSolutionStub(stubParams, funcName);
+      setCodeAndClearHistory(stub);
+      stubCodeRef.current = stub;
+      setHarness(buildHarness(funcName));
+      setFunctionName(funcName);
+    } catch {
+      setCode('# Could not generate stub — write your solution here\n');
+      setHarness('');
+    }
+
+    // Clear test cases — user clicks Generate to add them
+    testsRef.current = [];
+    setTests([]);
+    hiddenTestsRef.current = [];
+
+    // Try AI refinement in background (with timeout so it doesn't hang)
     setSigLoading(true);
     setParseCount(c => c + 1); // reset AI Tutor and other child components
   }, [parsed]);
 
-  // Step 2 (separate effect): AI signature refinement.
-  // Runs AFTER the heuristic code + loading indicator are rendered.
-  // A small delay ensures the user sees the heuristic code before AI replaces it.
+  // Step 2 (separate effect): AI signature refinement with timeout.
+  // The heuristic stub is already shown — AI only improves it if it responds fast.
   useEffect(() => {
     if (!sigLoading || !parsed) return;
     sigAbortRef.current?.abort();
     sigAbortRef.current = new AbortController();
     const ac = sigAbortRef.current;
-    // Send the FULL problem text (including examples + constraints) so AI can infer params
+    // Auto-abort after 8 seconds so the user isn't stuck waiting
+    const timer = setTimeout(() => ac.abort(), 8000);
     const fullProblem = problemRef.current || `${parsed.title}\n${parsed.description}`;
     (async () => {
       try {
@@ -346,103 +363,103 @@ function App() {
           stubCodeRef.current = stub;
           setHarness(buildHarness(obj.function_name));
           setFunctionName(obj.function_name);
-        } else {
-          // AI didn't return a valid signature — fall back to heuristic parser
-          const funcName = inferFunctionName(parsed.description || parsed.title);
-          let params: { name: string; type: string }[] = [];
-          if (parsed.examples.length > 0) params = inferParams(parsed.examples[0].input);
-          if (params.length === 0) params = inferParamsFromDescription(parsed.description);
-          const stubParams = params.length > 0 ? params : [{ name: 'data', type: 'int' }];
-          const stub = buildSolutionStub(stubParams, funcName);
-          setCodeAndClearHistory(stub);
-          stubCodeRef.current = stub;
-          setHarness(buildHarness(funcName));
-          setFunctionName(funcName);
         }
-      } catch (e) {
-        // AI failed or was cancelled — fall back to heuristic parser
-        console.warn('[Parse] AI signature generation failed, using heuristic:', e);
-        const funcName = inferFunctionName(parsed.description || parsed.title);
-        let params: { name: string; type: string }[] = [];
-        if (parsed.examples.length > 0) params = inferParams(parsed.examples[0].input);
-        if (params.length === 0) params = inferParamsFromDescription(parsed.description);
-        const stubParams = params.length > 0 ? params : [{ name: 'data', type: 'int' }];
-        const stub = buildSolutionStub(stubParams, funcName);
-        setCodeAndClearHistory(stub);
-        stubCodeRef.current = stub;
-        setHarness(buildHarness(funcName));
-        setFunctionName(funcName);
+        // If AI returns garbage, heuristic stub stays — no else needed
+      } catch {
+        // AI failed or timed out — heuristic stub already in editor, nothing to do
       }
-      finally { setSigLoading(false); }
+      finally { clearTimeout(timer); setSigLoading(false); }
     })();
   }, [sigLoading, parsed]);
 
-  // Generate test cases via AI — adds 10 test cases to the list each time it's clicked
-  const generateTests = async () => {
+  const MAX_TESTS = 10;
+
+  /** Build unique candidate test cases from examples / known / defaults. */
+  const buildCandidates = () => {
+    try {
+      if (!parsed) return [];
+      const existingInputs = new Set(testsRef.current.map(t => t.input.trim()).filter(Boolean));
+      let params: { name: string; type: string }[] = [];
+      try {
+        if (parsed.examples.length > 0) params = inferParams(parsed.examples[0].input);
+        if (params.length === 0) params = inferParamsFromDescription(parsed.description);
+      } catch { /* ignore */ }
+      const all = buildTestCasesFromExamples(parsed.examples, params, functionName);
+      return all.filter(c => {
+        const inp = (c.input || '').trim();
+        return inp && !existingInputs.has(inp);
+      });
+    } catch { return []; }
+  };
+
+  // Generate test cases — if none exist, auto-adds up to 5; otherwise shows popup
+  const generateTests = () => {
     try {
       if (!parsed) {
         showToast('Parse a problem first before generating test cases.');
         return;
       }
       if (genTestsLoading) return;
-      setGenTestsLoading(true);
-      genAbortRef.current?.abort();
-      genAbortRef.current = new AbortController();
-      const ac = genAbortRef.current;
-      const problemDesc = parsed.description || parsed.title;
-      const existingCount = testsRef.current.length;
-      let newTests: TestCase[] = [];
-      if (parsed.examples.length > 0 || existingCount > 0) {
-        const res = await api.ai('gen_tests', {
-          code: '', language: 'python',
-          problem: problemDesc + (existingCount > 0
-            ? `\n\nAlready have ${existingCount} test cases. Generate 10 NEW different test cases (edge cases, stress tests, boundary conditions). Do NOT repeat existing ones.`
-            : '\n\nGenerate 10 diverse test cases including basic cases and edge cases.'),
-        }, ac.signal);
-        let raw = res.text.trim();
-        const fenceMatch = raw.match(/```(?:json)?\s*\n?([\s\S]*?)\n?```/);
-        if (fenceMatch) raw = fenceMatch[1].trim();
-        raw = raw.replace(/,\s*([}\]])/g, '$1');
-        const arrMatch = raw.match(/\[[\s\S]*\]/);
-        if (arrMatch) raw = arrMatch[0];
-        const arr = JSON.parse(raw);
-        if (Array.isArray(arr) && arr.length > 0) {
-          newTests = arr.slice(0, 10).map((g: { input: string; expected: string }) => ({
-            id: nextId++, input: g.input, expected: g.expected, hidden: false,
-          }));
-        }
-      } else {
-        const res = await api.ai('gen_stub_and_tests', {
-          code: '', language: 'python',
-          problem: problemDesc,
-        }, ac.signal);
-        const obj = repairJSON(res.text);
-        if (obj.function_name && Array.isArray(obj.params)) {
-          setCodeAndClearHistory(buildSolutionStub(obj.params, obj.function_name));
-          setHarness(buildHarness(obj.function_name));
-          setLanguage('python');
-        }
-        if (Array.isArray(obj.test_cases) && obj.test_cases.length > 0) {
-          newTests = obj.test_cases.slice(0, 10).map((g: { input: string; expected: string }) => ({
-            id: nextId++, input: g.input, expected: g.expected, hidden: false,
-          }));
-        }
+
+      const existing = testsRef.current;
+
+      if (existing.length >= MAX_TESTS) {
+        showToast(`Maximum ${MAX_TESTS} test cases reached.`, 'info');
+        return;
       }
-      // Append to existing tests (don't replace)
-      if (newTests.length > 0) {
-        const combined = [...testsRef.current, ...newTests];
-        testsRef.current = combined;
-        setTests(combined);
-        if (existingCount === 0) setActiveTest(0);
-        setResults([]);
+
+      // No tests yet → auto-generate up to 5
+      if (existing.length === 0) {
+        addGeneratedTests(5);
+        return;
       }
+
+      // Tests exist → show popup asking how many to add
+      const remaining = MAX_TESTS - existing.length;
+      setGenCount(Math.min(3, remaining));
+      setShowGenModal(true);
     } catch (e) {
-      // AI failed or cancelled — show error if not an abort
-      if (e instanceof Error && e.name !== 'AbortError') {
-        showToast('Failed to generate test cases: ' + e.message);
+      if (e instanceof Error) showToast('Failed: ' + e.message);
+    }
+  };
+
+  /** Actually add N generated test cases to the list. */
+  const addGeneratedTests = (count: number) => {
+    try {
+      setGenTestsLoading(true);
+      const existing = testsRef.current;
+      const remaining = MAX_TESTS - existing.length;
+      const limit = Math.min(count, remaining);
+      if (limit <= 0) {
+        showToast(`Maximum ${MAX_TESTS} test cases reached.`, 'info');
+        return;
       }
+
+      const candidates = buildCandidates();
+      const newTests: TestCase[] = [];
+
+      // Add test cases that have real input (and expected when available)
+      for (const c of candidates) {
+        if (newTests.length >= limit) break;
+        if (!(c.input || '').trim()) continue; // skip empty inputs
+        newTests.push({ id: nextId++, input: c.input, expected: c.expected, hidden: false });
+      }
+
+      if (newTests.length === 0) {
+        showToast('No test cases available to add. Use ＋ Add to create one manually.', 'info');
+        return;
+      }
+
+      const combined = [...existing, ...newTests];
+      testsRef.current = combined;
+      setTests(combined);
+      if (existing.length === 0) setActiveTest(0);
+      setResults([]);
+    } catch (e) {
+      if (e instanceof Error) showToast('Failed: ' + e.message);
     } finally {
       setGenTestsLoading(false);
+      setShowGenModal(false);
     }
   };
 
@@ -804,6 +821,10 @@ function App() {
         showToast('Write some code before visualizing. The editor only has a stub with "pass".');
         return;
       }
+      if (tests.length === 0 || !(tests[activeTest]?.input || '').trim()) {
+        showToast('Add a test case with input first (click Generate or + Add).', 'info');
+        return;
+      }
       busyRef.current = true; setBusy(true); setError('');
       const data = await api.visualize(language, fullCode, tests[activeTest]?.input || '');
       // Filter out steps that fall in the hidden harness (line > solution line count)
@@ -811,7 +832,7 @@ function App() {
       const solutionLines = code.split('\n').length;
       const filtered = {
         ...data,
-        steps: (data.steps || []).filter(s => s.line <= solutionLines),
+        steps: (data.steps || []).filter(s => s.line >= 1 && s.line <= solutionLines),
       };
       setVisual(filtered); setStep(0); setTab('debugger');
     } catch (e) { setError(e instanceof Error ? e.message : String(e)); }
@@ -951,9 +972,11 @@ function App() {
       setCodeAndClearHistory(p.code || '');
       setLanguage((p.language as Language) || 'python');
       // Extract function name from loaded code and rebuild harness
-      const codeMatch = (p.code || '').match(/def\s+(\w+)\s*\(([^)]*)\)/);
-      const fnName = codeMatch ? codeMatch[1] : '';
-      const fnParams = codeMatch ? codeMatch[2] : '';
+      // Skip __init__, __new__, and other dunder methods — find the actual solution function
+      const allDefs = [...(p.code || '').matchAll(/def\s+(\w+)\s*\(([^)]*)\)/g)];
+      const solnDef = allDefs.find(m => !m[1].startsWith('_')) || allDefs.find(m => !m[1].startsWith('__')) || allDefs[0];
+      const fnName = solnDef ? solnDef[1] : '';
+      const fnParams = solnDef ? solnDef[2] : '';
       setFunctionName(fnName);
       // Build the stub for Reset: use saved stub_code if available,
       // otherwise reconstruct from the function signature in the code
@@ -1189,6 +1212,7 @@ function App() {
           onCancelGenerate={cancelGenerate}
           initialPreview={panelPreview}
           aiTitle={problemTitle}
+          maxTests={MAX_TESTS}
         />
         </div>
 
@@ -1229,7 +1253,7 @@ function App() {
           {error && <div className="error-box">{error}</div>}
           {tab === 'tests' && <ResultsPanel results={results} onPick={setActiveTest} />}
           {tab === 'console' && <ConsolePanel runResult={runResult} expected={tests[activeTest]?.expected} activeTest={activeTest} />}
-          {tab === 'debugger' && <DebuggerPanel visual={visual} step={step} onStep={setStep} code={code} />}
+          {tab === 'debugger' && <DebuggerPanel visual={visual} step={step} onStep={setStep} code={code} testInput={tests[activeTest]?.input || ''} />}
           <div className={tab === 'ai' ? 'output-content' : 'output-content hidden'}>
             <AITutor
               key={parseCount}
@@ -1278,19 +1302,45 @@ function App() {
             <div className="modal-icon">🧪</div>
             <h3 className="modal-title">No Test Cases</h3>
             <p className="modal-desc">
-              You need test cases to run your code. Generate them automatically with AI or add one manually.
+              You need test cases to run your code. Generate them automatically or add one manually.
             </p>
             <div className="modal-actions">
               <button className="secondary" onClick={() => setShowNoTestsModal(false)}>Cancel</button>
               <button className="secondary" onClick={() => {
                 setShowNoTestsModal(false);
-                setTests([{ id: nextId++, input: '', expected: '' }]);
+                setTests([{ id: nextId++, input: '', expected: '', hidden: false }]);
                 setTab('tests');
               }}>＋ Add Manually</button>
               <button className="success" onClick={() => {
                 setShowNoTestsModal(false);
                 generateTests();
-              }} disabled={!parsed}>⚡ Generate with AI</button>
+              }} disabled={!parsed}>⚡ Generate</button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Generate test cases modal — shown when tests already exist */}
+      {showGenModal && (
+        <div className="modal-overlay" onClick={() => setShowGenModal(false)}>
+          <div className="modal" onClick={e => e.stopPropagation()}>
+            <div className="modal-icon">⚡</div>
+            <h3 className="modal-title">Add Test Cases</h3>
+            <p className="modal-desc">
+              You have {tests.length} of {MAX_TESTS} test cases. How many would you like to add?
+            </p>
+            <div className="gen-count-picker">
+              {Array.from({ length: MAX_TESTS - tests.length }, (_, i) => i + 1).map(n => (
+                <button
+                  key={n}
+                  className={'gen-count-btn' + (genCount === n ? ' active' : '')}
+                  onClick={() => setGenCount(n)}
+                >{n}</button>
+              ))}
+            </div>
+            <div className="modal-actions">
+              <button className="secondary" onClick={() => setShowGenModal(false)}>Cancel</button>
+              <button className="success" onClick={() => addGeneratedTests(genCount)}>Add {genCount} case{genCount > 1 ? 's' : ''}</button>
             </div>
           </div>
         </div>

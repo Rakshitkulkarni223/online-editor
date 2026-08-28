@@ -21,12 +21,13 @@ type Props = {
   onCancelGenerate: () => void;
   initialPreview?: boolean; // start in preview mode (for sidebar loads)
   aiTitle?: string; // AI-generated human-readable title
+  maxTests?: number; // max test cases allowed (default 10)
 };
 
 let nextId = 100;
 
 export function ProblemPanel(props: Props) {
-  const { problem, onProblem, parsed, onParsed, tests, onTests, results, activeTest, onActiveTest, onRunOne, onUseSignature, parseError, genTestsLoading, onGenerateTests, onCancelGenerate, initialPreview, aiTitle } = props;
+  const { problem, onProblem, parsed, onParsed, tests, onTests, results, activeTest, onActiveTest, onRunOne, onUseSignature, parseError, genTestsLoading, onGenerateTests, onCancelGenerate, initialPreview, aiTitle, maxTests = 10 } = props;
   const [showRaw, setShowRaw] = useState(!initialPreview);
 
   // Generate: parse the problem, show preview, and trigger AI code stub + test cases
@@ -48,7 +49,12 @@ export function ProblemPanel(props: Props) {
   // Edit: go back to the raw textarea
   const doEdit = () => setShowRaw(true);
 
-  const addTest = () => onTests(prev => [...prev, { id: nextId++, input: '', expected: '' }]);
+  const addTest = () => {
+    try {
+      if (tests.length >= maxTests) return;
+      onTests(prev => [...prev, { id: nextId++, input: '', expected: '', hidden: false }]);
+    } catch { /* ignore */ }
+  };
   const updateTest = (i: number, key: keyof TestCase, value: string | boolean) =>
     onTests(prev => prev.map((t, idx) => (idx === i ? { ...t, [key]: value } : t)));
   const deleteTest = (i: number) => onTests(prev => prev.filter((_, idx) => idx !== i));
@@ -117,9 +123,9 @@ export function ProblemPanel(props: Props) {
           {genTestsLoading ? (
             <button type="button" className="icon-button stop-btn" onClick={onCancelGenerate}>✕ Stop</button>
           ) : (
-            <button type="button" className="icon-button" onClick={onGenerateTests} disabled={!parsed} title="Generate 10 more test cases with AI">⚡ Generate</button>
+            <button type="button" className="icon-button" onClick={onGenerateTests} disabled={!parsed} title="Add test cases from problem examples">⚡ Generate</button>
           )}
-          <button type="button" className="icon-button" onClick={addTest} disabled={genTestsLoading}>＋ Add</button>
+          <button type="button" className="icon-button" onClick={addTest} disabled={genTestsLoading || tests.length >= maxTests} title={tests.length >= maxTests ? `Max ${maxTests} test cases` : 'Add empty test case'}>＋ Add</button>
         </div>
       </div>
       <div className="tests-list">
@@ -130,7 +136,7 @@ export function ProblemPanel(props: Props) {
           </div>
         )}
         {!genTestsLoading && tests.length === 0 && (
-          <div className="muted" style={{ padding: '12px', textAlign: 'center' }}>No test cases yet. Click ⚡ Generate to add 10 cases with AI, or ＋ Add manually.</div>
+          <div className="muted" style={{ padding: '12px', textAlign: 'center' }}>No test cases yet. Click ⚡ Generate to add from examples, or ＋ Add manually.</div>
         )}
         {!genTestsLoading && tests.map((t, i) => (
           <div key={t.id} className={'test-card' + (activeTest === i ? ' active' : '')} onClick={() => onActiveTest(i)}>
